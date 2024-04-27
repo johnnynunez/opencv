@@ -80,14 +80,6 @@ template<class T>
 class RNNDescriptor
 {
 public:
-    enum class RNNMode
-    {
-        RNN_RELU,
-        RNN_TANH,
-        LSTM,
-        GRU
-    };
-
     RNNDescriptor() noexcept = default;
     RNNDescriptor(const RNNDescriptor &) = delete;
     RNNDescriptor(RNNDescriptor &&other) noexcept : descriptor{other.descriptor}
@@ -95,41 +87,53 @@ public:
         other.descriptor = nullptr;
     }
 
-    /**
-    */
     RNNDescriptor(const Handle &handle, RNNMode mode, int hidden_size, int num_layers,
-                  bool bidirectional, const DropoutDescriptor &dropoutDesc)
+                  bool bidirectional, const DropoutDescriptor &dropoutDesc, int input_size, int proj_size, uint32_t aux_flags)
     {
         CUDA4DNN_CHECK_CUDNN(cudnnCreateRNNDescriptor(&descriptor));
-        const auto rnn_mode = [mode] {
+
+        cudnnRNNAlgo_t algo = CUDNN_RNN_ALGO_STANDARD;
+        cudnnRNNMode_t cellMode = [mode] {
             switch (mode)
             {
-            case RNNMode::RNN_RELU:
-                return CUDNN_RNN_RELU;
-            case RNNMode::RNN_TANH:
-                return CUDNN_RNN_TANH;
-            case RNNMode::LSTM:
-                return CUDNN_LSTM;
-            case RNNMode::GRU:
-                return CUDNN_GRU;
-            default:
-                return CUDNN_LSTM;
+                case RNNMode::RNN_RELU:
+                    return CUDNN_RNN_RELU;
+                case RNNMode::RNN_TANH:
+                    return CUDNN_RNN_TANH;
+                case RNNMode::LSTM:
+                    return CUDNN_LSTM;
+                case RNNMode::GRU:
+                    return CUDNN_GRU;
+                default:
+                    return CUDNN_LSTM;
             }
         }();
+
+        cudnnDirectionMode_t dirMode = bidirectional ? CUDNN_BIDIRECTIONAL : CUDNN_UNIDIRECTIONAL;
+        cudnnRNNInputMode_t inputMode = CUDNN_LINEAR_INPUT;
+        cudnnDataType_t dataType = detail::get_data_type<T>();
+        cudnnMathType_t mathType = CUDNN_DEFAULT_MATH;
+        cudnnRNNBiasMode_t biasMode = CUDNN_RNN_DOUBLE_BIAS;
 
         try
         {
             CUDA4DNN_CHECK_CUDNN(cudnnSetRNNDescriptor_v8(
-           descriptor, algo, rnn_mode,
-          CUDNN_RNN_NO_BIAS, // Where can this come from?
-          bidirectional ? CUDNN_BIDIRECTIONAL : CUDNN_UNIDIRECTIONAL,
-          CUDNN_LINEAR_INPUT, detail::get_data_type<T>(),
-          detail::get_data_type<T>(), // CUDNN_RNN_ALGO_STANDARD,
-          CUDNN_DEFAULT_MATH,         // default precision
-          input_size, hidden_size,
-          0, // where can this come from?
-          num_layers, dropoutDesc.get(),
-          0)); // What other flags do we might want here?
+                    descriptor,
+                    algo,
+                    cellMode,
+                    biasMode,
+                    dirMode,
+                    inputMode,
+                    dataType,
+                    CUDNN_DATA_FLOAT, // Assuming FP32 computation
+                    mathType,
+                    input_size,
+                    hidden_size,
+                    proj_size,
+                    num_layers,
+                    dropoutDesc.get(),
+                    aux_flags
+            ));
         }
         catch (...)
         {
@@ -158,10 +162,8 @@ public:
 
 private:
     cudnnRNNDescriptor_t descriptor{nullptr};
-    cudnnRNNMode_t mode{CUDNN_LSTM};
-    // support only one algo for a while
-    cudnnRNNAlgo_t algo{CUDNN_RNN_ALGO_STANDARD};
 };
+
 
 template <class T>
 void LSTMForward(const Handle &handle, const RNNDescriptor<T> &rnnDesc,
